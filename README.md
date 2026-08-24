@@ -1,4 +1,4 @@
-# FastAPI Product Inventory API 🚀
+# FastAPI Product Inventory API 
 
 A robust, RESTful backend API built with **FastAPI** and **PostgreSQL**. This service provides complete CRUD (Create, Read, Update, Delete) operations for inventory management, demonstrating core backend architecture concepts including ORM integration, data validation, and query parameter filtering.
 
@@ -17,9 +17,12 @@ A robust, RESTful backend API built with **FastAPI** and **PostgreSQL**. This se
 * **Professional Error Handling:** Custom HTTP Exceptions (e.g., 404 Not Found) prevent silent failures and false success codes.
 * **Auto-Incrementing Primary Keys:** PostgreSQL sequence management ensures collision-free ID generation.
 
-## 🚀 Quick Start / Setup
+### 🚀 Recent Features
+* **Stateless Authentication:** Implemented secure user login utilizing the OAuth2 standard and `python-jose` for JSON Web Token (JWT) generation and validation.
+* **Shopping Cart Architecture:** Engineered a relational `Cart` table in PostgreSQL using SQLAlchemy to link users to their selected products.
+* **Protected Routing:** Built secured `/cart` (POST) and `/my-cart` (GET) endpoints in FastAPI that extract the `user_id` strictly from verified HTTP headers.
 
-### 1. Clone the repository
-```bash
-git clone [https://github.com/yourusername/your-repo-name.git](https://github.com/yourusername/your-repo-name.git)
-cd your-repo-name
+### 🛠️ How to Test the API
+1. Start the local server:
+   ```bash
+   uvicorn main:app --reload

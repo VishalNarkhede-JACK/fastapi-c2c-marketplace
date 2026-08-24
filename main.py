@@ -1,9 +1,12 @@
 from fastapi import Depends, FastAPI, HTTPException, status
-
-from models import Produk
+from models import Produk, ResponseToUser, UserLogin, UserCreate,CartItemAdd
 from database import session, engine
 import database_models
 from sqlalchemy.orm import Session
+from typing import List
+import utils
+from fastapi.security import OAuth2PasswordRequestForm
+
 app = FastAPI()
 
 database_models.Base.metadata.create_all(bind=engine)
@@ -124,3 +127,66 @@ def dalit(id: int, db: Session = Depends(get_db)):
 @app.get("/biach")
 def biach():
     return "you dumb biach"
+
+# the user login and password section(addtion to the base code)
+
+@app.post("/users", response_model=ResponseToUser)
+def create_user(user: UserCreate, db: Session = Depends(get_db)):
+    new_user = database_models.User(email = user.email, password = user.password)
+
+    db.add(new_user)
+    db.commit()
+    db.refresh(new_user)
+    return new_user
+
+@app.get("/users", response_model=List[ResponseToUser])
+def get_all_users(db: Session = Depends(get_db)):
+    users = db.query(database_models.User).all()
+    return users
+
+@app.post("/login")
+def login(user_credentials: OAuth2PasswordRequestForm = Depends(), db: Session = Depends(get_db)):
+    
+    # 1. Look for the user (Note: we must use .username here because of the OAuth2 standard)
+    user = db.query(database_models.User).filter(
+        database_models.User.email == user_credentials.username
+    ).first()
+    
+    # 2. Reject if wrong
+    if not user or user.password != user_credentials.password:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN, 
+            detail="Invalid Credentials"
+        )
+        
+    # 3. Generate and return the token
+    access_token = utils.create_access_token(data={"user_id": user.id})
+    return {"access_token": access_token, "token_type": "bearer"}
+
+@app.get("/my-cart")
+def view_cart(current_user_id: int = Depends(utils.get_current_user), db: Session = Depends(get_db) ):
+
+    cart_items = db.query(database_models.Cart).filter(
+        database_models.Cart.user_id == current_user_id
+    ).all()
+    
+    return {"user_id": current_user_id, "cart_items": cart_items}
+
+@app.post("/cart", status_code=status.HTTP_201_CREATED)
+def add_to_cart(item: CartItemAdd, db: Session = Depends(get_db), current_user_id: int = Depends(utils.get_current_user)):
+    new_cart_item = database_models.Cart(
+        user_id=current_user_id, 
+        product_id=item.product_id, 
+        quantity=item.quantity
+    )
+    # 2. Stage the new data
+    db.add(new_cart_item)
+    
+    # 3. Commit the transaction to PostgreSQL
+    db.commit()
+    
+    # 4. Refresh to grab the auto-generated primary key (id)
+    db.refresh(new_cart_item)
+    
+    return {"message": "Item successfully added!", "item_details": new_cart_item}
+
