@@ -3,6 +3,8 @@ from fastapi import Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer
 from jose import jwt, JWTError
 from datetime import datetime, timedelta
+from database import session
+import database_models
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -23,6 +25,25 @@ def create_access_token(data: dict):
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/login")
 
 def get_current_user(token: str = Depends(oauth2_scheme)):
+
+    # --- THE NEW BLOCKLIST CHECK ---
+    db = session() # Open a quick database connection
+    try:
+        is_blocked = db.query(database_models.Blocklist).filter(
+            database_models.Blocklist.token == token
+        ).first()
+    finally:
+        db.close() # Always close it so we don't leak memory
+
+    # If the token is in the database, kick them out immediately
+    if is_blocked:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="This token has been logged out. Please log in again.",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    # --- THE REGULAR CHECK ---
     # 1. Setup the generic error if the token is fake or expired
     credentials_exception = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
@@ -45,3 +66,5 @@ def get_current_user(token: str = Depends(oauth2_scheme)):
     except JWTError:
         # If the token is expired or tampered with, it throws an error
         raise credentials_exception
+
+    ##refresh token

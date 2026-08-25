@@ -32,3 +32,13 @@ class Cart(Base):
     user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
     product_id = Column(Integer, nullable=False)
     quantity = Column(Integer, nullable=False, default=1)
+
+
+class Blocklist(Base):
+    __tablename__ = "blocklisted_tokens"
+    
+    id = Column(Integer, primary_key=True, nullable=False)
+    # The string must be unique so we don't accidentally blocklist the same token twice
+    token = Column(String, unique=True, nullable=False)
+
+    created_at = Column(TIMESTAMP(timezone=True), nullable=False, server_default=text('now()'))

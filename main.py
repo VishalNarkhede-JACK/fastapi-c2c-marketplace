@@ -1,4 +1,4 @@
-from fastapi import Depends, FastAPI, HTTPException, status
+from fastapi import Depends, FastAPI, HTTPException, status, BackgroundTasks
 from models import Produk, ResponseToUser, UserLogin, UserCreate,CartItemAdd
 from database import session, engine
 import database_models
@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session
 from typing import List
 import utils
 from fastapi.security import OAuth2PasswordRequestForm
+from datetime import datetime, timedelta, timezone
 
 app = FastAPI()
 
@@ -106,7 +107,7 @@ def update(id: int, pro: Produk, db: Session = Depends(get_db)):
 
 
 @app.delete("/produck/{id}")
-def dalit(id: int, db: Session = Depends(get_db)):
+def delete_item(id: int, db: Session = Depends(get_db)):
     
     db_product = db.query(database_models.Produk).filter(database_models.Produk.id == id).first()
     
@@ -164,13 +165,47 @@ def login(user_credentials: OAuth2PasswordRequestForm = Depends(), db: Session =
     return {"access_token": access_token, "token_type": "bearer"}
 
 @app.get("/my-cart")
-def view_cart(current_user_id: int = Depends(utils.get_current_user), db: Session = Depends(get_db) ):
-
-    cart_items = db.query(database_models.Cart).filter(
-        database_models.Cart.user_id == current_user_id
-    ).all()
+def view_cart(
+    current_user_id: int = Depends(utils.get_current_user), 
+    db: Session = Depends(get_db)
+):
+    # 1. The SQLAlchemy JOIN Query
+    # Equivalent SQL: 
+    # SELECT * FROM cart_item 
+    # JOIN product ON cart_item.product_id = product.id 
+    # WHERE cart_item.user_id = current_user_id;
     
-    return {"user_id": current_user_id, "cart_items": cart_items}
+    results = db.query(database_models.Cart, database_models.Produk)\
+        .join(database_models.Produk, database_models.Cart.product_id == database_models.Produk.id)\
+        .filter(database_models.Cart.user_id == current_user_id)\
+        .all()
+        
+    # 2. Format the raw database tuples into a clean dictionary
+    formatted_cart = []
+    cart_total = 0.0
+    
+    for cart_item, product in results:
+        # Calculate the subtotal for this specific item (price * quantity)
+        subtotal = product.price * cart_item.quantity
+        cart_total += subtotal
+        
+        formatted_cart.append({
+            "cart_id": cart_item.id,
+            "product_id": product.id,
+            "name": product.name,
+            "description": product.description,
+            "unit_price": product.price,
+            "quantity": cart_item.quantity,
+            "subtotal": subtotal
+        })
+        
+    # 3. Return the fully assembled cart
+    return {
+        "user_id": current_user_id,
+        "total_items": len(formatted_cart),
+        "cart_total": cart_total,
+        "items": formatted_cart
+    }
 
 @app.post("/cart", status_code=status.HTTP_201_CREATED)
 def add_to_cart(item: CartItemAdd, db: Session = Depends(get_db), current_user_id: int = Depends(utils.get_current_user)):
@@ -189,4 +224,41 @@ def add_to_cart(item: CartItemAdd, db: Session = Depends(get_db), current_user_i
     db.refresh(new_cart_item)
     
     return {"message": "Item successfully added!", "item_details": new_cart_item}
+
+@app.delete("/cart/{cart_item_id}", status_code=status.HTTP_204_NO_CONTENT)
+def remove_from_cart(cart_item_id: int,db: Session = Depends(get_db),current_user_id: int = Depends(utils.get_current_user)):
+    # 1. Look for the item, but STRICTLY filter by the current user's ID too
+    item_query = db.query(database_models.Cart).filter(
+        database_models.Cart.id == cart_item_id,
+        database_models.Cart.user_id == current_user_id  # <-- THE SECURITY LOCK, to check if the user has access to delete the cart item
+    )
+    
+    # 2. Grab the actual item
+    cart_item = item_query.first()
+    
+    # 3. If it doesn't exist (or belongs to someone else), throw an error
+    if not cart_item:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, 
+            detail="Item not found in your cart"
+        )
+        
+    # 4. Delete and commit
+    item_query.delete(synchronize_session=False)
+    db.commit()
+    
+    return 
+
+@app.post("/logout", status_code=status.HTTP_200_OK)
+def logout(token: str = Depends(utils.oauth2_scheme), db: Session = Depends(get_db)):
+    # 1. Take the exact token string the user used to authenticate and save it
+    blocked_token = database_models.Blocklist(token=token)
+    
+    # 2. Push it to PostgreSQL
+    db.add(blocked_token)
+    db.commit()
+    
+    return {"message": "Successfully logged out. Token is now dead."}
+
+
 
