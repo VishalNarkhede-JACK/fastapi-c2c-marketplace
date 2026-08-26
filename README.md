@@ -31,3 +31,5 @@ A robust, RESTful backend API built with **FastAPI** and **PostgreSQL**. This se
 * **Token Blocklisting (Logout):** Engineered a stateful logout architecture using a PostgreSQL blocklist table to instantly invalidate JWTs and prevent token hijacking.
 * **Relational SQL Joins:** Upgraded the `/my-cart` endpoint with SQLAlchemy joins to merge `cart_item` and `product` tables, allowing dynamic calculation of subtotals and grand totals on the backend.
 * **Secure Data Deletion:** Built a protected `DELETE` route to remove items from the cart, utilizing dual-verification (cart item ID + extracted token ID) to prevent unauthorized cross-user modifications.
+
+* **Purchase History Generation:** Built a `GET /my-orders` endpoint that queries PostgreSQL to dynamically reconstruct past receipts, mapping `Order` headers to their respective `OrderItem` line records, sorted chronologically.

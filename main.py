@@ -7,6 +7,7 @@ from typing import List
 import utils
 from fastapi.security import OAuth2PasswordRequestForm
 from datetime import datetime, timedelta, timezone
+from jose import jwt, ExpiredSignatureError
 
 app = FastAPI()
 
@@ -249,16 +250,129 @@ def remove_from_cart(cart_item_id: int,db: Session = Depends(get_db),current_use
     
     return 
 
-@app.post("/logout", status_code=status.HTTP_200_OK)
-def logout(token: str = Depends(utils.oauth2_scheme), db: Session = Depends(get_db)):
-    # 1. Take the exact token string the user used to authenticate and save it
-    blocked_token = database_models.Blocklist(token=token)
+
+def cleanup_expired_tokens(db: Session):
+    # 1. Grab every token currently in the blocklist
+    all_blocked_tokens = db.query(database_models.Blocklist).all()
     
-    # 2. Push it to PostgreSQL
+    for item in all_blocked_tokens:
+        try:
+            # 2. Try to read the token using the variables from utils.py
+            jwt.decode(item.token, utils.SECRET_KEY, algorithms=[utils.ALGORITHM])
+        
+        except ExpiredSignatureError:
+            # 3. If it naturally expired, delete it from PostgreSQL
+            db.delete(item)
+            
+        except jwt.JWTError:
+            # 4. If a hacker tampered with it, delete it anyway
+            db.delete(item)
+            
+    # 5. Save the deletions to the hard drive
+    db.commit()
+
+
+@app.post("/logout", status_code=status.HTTP_200_OK)
+def logout(background_tasks: BackgroundTasks, token: str = Depends(utils.oauth2_scheme), db: Session = Depends(get_db)):
+    blocked_token = database_models.Blocklist(token=token)
     db.add(blocked_token)
     db.commit()
     
-    return {"message": "Successfully logged out. Token is now dead."}
+    # Dispatch the cleanup script to run silently in the background
+    background_tasks.add_task(cleanup_expired_tokens, db)
+    
+    return {"message": "Successfully logged out. Database cleanup initiated."}
+
+@app.post("/checkout", status_code=status.HTTP_201_CREATED)
+def process_checkout(current_user_id : int = Depends(utils.get_current_user), db: Session=Depends(get_db)):
+    results = db.query(database_models.Cart,database_models.Produk)\
+        .join(database_models.Produk,database_models.Cart.product_id == database_models.Produk.id)\
+        .filter(database_models.Cart.user_id == current_user_id)\
+        .all()
+    if not results:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Your cart is empty. Nothing to checkout")
+
+    total_amount = sum(product.price * cart_item.quantity for cart_item, product in results)
+    new_order = database_models.Order(
+        user_id=current_user_id,
+        total_amount=total_amount,
+        status="Pending"
+    )
+    db.add(new_order)
+    
+    # CRITICAL: We use flush() instead of commit() here.
+    # flush() sends the data to PostgreSQL to generate the primary key (new_order.id),
+    # but keeps the transaction OPEN in memory so we can roll back if something fails later.
+    db.flush()
+    for cart_item, product in results:
+        order_item = database_models.OrderItem(
+            order_id=new_order.id,          # We successfully grabbed the ID from the flush
+            product_id=product.id,
+            quantity=cart_item.quantity,
+            unit_price=product.price        # Hardcoding the price for historical accuracy
+        )
+        db.add(order_item)
+
+    #  Wipe the user's cart clean
+    db.query(database_models.Cart).filter(
+        database_models.Cart.user_id == current_user_id
+    ).delete(synchronize_session=False)
+
+    #  The Final Commit (The Atomic Save)
+    # This single command tells PostgreSQL: "Everything worked, write it ALL to the hard drive now."
+    db.commit()
+    db.refresh(new_order)
+
+    return {
+        "message": "Checkout successful!", 
+        "order_id": new_order.id, 
+        "total_paid": total_amount
+    }
 
 
+@app.get("/my-orders")
+def get_order_history(
+    current_user_id: int = Depends(utils.get_current_user), 
+    db: Session = Depends(get_db)
+):
+    # 1. Fetch all overarching Order Headers for this user (sorted newest first)
+    orders = db.query(database_models.Order).filter(
+        database_models.Order.user_id == current_user_id
+    ).order_by(database_models.Order.created_at.desc()).all()
+
+    # 2. If they haven't bought anything, return an empty list
+    if not orders:
+        return {"message": "You have no past orders.", "order_history": []}
+
+    formatted_history = []
+
+    # 3. Loop through every receipt
+    for order in orders:
+        
+        # 4. For each receipt, fetch its specific Line Items
+        items = db.query(database_models.OrderItem).filter(
+            database_models.OrderItem.order_id == order.id
+        ).all()
+        
+        # 5. Format the Line Items
+        formatted_items = []
+        for item in items:
+            formatted_items.append({
+                "product_id": item.product_id,
+                "quantity": item.quantity,
+                "unit_price_paid": item.unit_price,
+                "subtotal": item.quantity * item.unit_price
+            })
+            
+        # 6. Bundle the Header and the Line Items together
+        formatted_history.append({
+            "order_id": order.id,
+            "status": order.status,
+            "date": order.created_at,
+            "total_amount": order.total_amount,
+            "items": formatted_items
+        })
+
+    # 7. Return the massive JSON object to the frontend
+    return {"user_id": current_user_id, "order_history": formatted_history}
 
