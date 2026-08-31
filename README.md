@@ -33,3 +33,5 @@ A robust, RESTful backend API built with **FastAPI** and **PostgreSQL**. This se
 * **Secure Data Deletion:** Built a protected `DELETE` route to remove items from the cart, utilizing dual-verification (cart item ID + extracted token ID) to prevent unauthorized cross-user modifications.
 
 * **Purchase History Generation:** Built a `GET /my-orders` endpoint that queries PostgreSQL to dynamically reconstruct past receipts, mapping `Order` headers to their respective `OrderItem` line records, sorted chronologically.
+
+* **Concurrency & Race Condition Prevention:** Engineered a thread-safe checkout pipeline using pessimistic database locking (`SELECT ... FOR UPDATE`). This guarantees absolute inventory accuracy by forcing concurrent purchase requests for the same item to process sequentially, preventing stock from ever dropping below zero.

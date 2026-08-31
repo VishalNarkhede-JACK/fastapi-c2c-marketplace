@@ -13,9 +13,7 @@ app = FastAPI()
 
 database_models.Base.metadata.create_all(bind=engine)
 
-@app.get("/")
-def wtf():
-    return "OM is GAYYYY"
+
 
 def get_db():
     db = session()
@@ -284,47 +282,77 @@ def logout(background_tasks: BackgroundTasks, token: str = Depends(utils.oauth2_
     return {"message": "Successfully logged out. Database cleanup initiated."}
 
 @app.post("/checkout", status_code=status.HTTP_201_CREATED)
-def process_checkout(current_user_id : int = Depends(utils.get_current_user), db: Session=Depends(get_db)):
-    results = db.query(database_models.Cart,database_models.Produk)\
-        .join(database_models.Produk,database_models.Cart.product_id == database_models.Produk.id)\
-        .filter(database_models.Cart.user_id == current_user_id)\
-        .all()
-    if not results:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Your cart is empty. Nothing to checkout")
+def process_checkout(
+    current_user_id: int = Depends(utils.get_current_user), 
+    db: Session = Depends(get_db)
+):
+    # 1. Get just the cart items first
+    cart_items = db.query(database_models.Cart).filter(
+        database_models.Cart.user_id == current_user_id
+    ).all()
+        
+    if not cart_items:
+        raise HTTPException(status_code=400, detail="Your cart is empty.")
 
-    total_amount = sum(product.price * cart_item.quantity for cart_item, product in results)
+    total_amount = 0.0
+    order_items_to_add = []
+
+    # 2. Iterate through the cart, locking each product as we go
+    for item in cart_items:
+        # THE LOCK: with_for_update() freezes this row for everyone else
+        product = db.query(database_models.Produk).filter(
+            database_models.Produk.id == item.product_id
+        ).with_for_update().first()
+
+        # 3. Validation: Do we have enough stock?
+        if not product or product.quantity < item.quantity:
+            # If it fails, the database automatically rolls back and unlocks everything
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST, 
+                detail=f"Sorry, {product.name if product else 'Item'} does not have enough stock."
+            )
+
+        # 4. Math & Inventory Deduction
+        total_amount += (product.price * item.quantity)
+        product.quantity -= item.quantity  # Safely decrease the stock
+
+        # Stage the line item to be saved later
+        order_items_to_add.append(
+            database_models.OrderItem(
+                product_id=product.id,
+                quantity=item.quantity,
+                unit_price=product.price
+            )
+        )
+
+    # 5. Create the Order Header
     new_order = database_models.Order(
         user_id=current_user_id,
         total_amount=total_amount,
         status="Pending"
     )
     db.add(new_order)
-    
-    # CRITICAL: We use flush() instead of commit() here.
-    # flush() sends the data to PostgreSQL to generate the primary key (new_order.id),
-    # but keeps the transaction OPEN in memory so we can roll back if something fails later.
-    db.flush()
-    for cart_item, product in results:
-        order_item = database_models.OrderItem(
-            order_id=new_order.id,          # We successfully grabbed the ID from the flush
-            product_id=product.id,
-            quantity=cart_item.quantity,
-            unit_price=product.price        # Hardcoding the price for historical accuracy
-        )
+#      # CRITICAL: We use flush() instead of commit() here.
+#     # flush() sends the data to PostgreSQL to generate the primary key (new_order.id),
+#     # but keeps the transaction OPEN in memory so we can roll back if something fails later.
+    db.flush() 
+
+    # 6. Attach the staged items to the new order ID
+    for order_item in order_items_to_add:
+        order_item.order_id = new_order.id
         db.add(order_item)
 
-    #  Wipe the user's cart clean
+    # 7. Wipe the Cart
     db.query(database_models.Cart).filter(
         database_models.Cart.user_id == current_user_id
     ).delete(synchronize_session=False)
 
-    #  The Final Commit (The Atomic Save)
-    # This single command tells PostgreSQL: "Everything worked, write it ALL to the hard drive now."
+    # 8. The Atomic Save (Unlocks all rows and finalizes the transaction)
     db.commit()
     db.refresh(new_order)
 
     return {
-        "message": "Checkout successful!", 
+        "message": "Checkout successful! Stock has been updated.", 
         "order_id": new_order.id, 
         "total_paid": total_amount
     }
