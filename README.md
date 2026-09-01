@@ -35,3 +35,8 @@ A robust, RESTful backend API built with **FastAPI** and **PostgreSQL**. This se
 * **Purchase History Generation:** Built a `GET /my-orders` endpoint that queries PostgreSQL to dynamically reconstruct past receipts, mapping `Order` headers to their respective `OrderItem` line records, sorted chronologically.
 
 * **Concurrency & Race Condition Prevention:** Engineered a thread-safe checkout pipeline using pessimistic database locking (`SELECT ... FOR UPDATE`). This guarantees absolute inventory accuracy by forcing concurrent purchase requests for the same item to process sequentially, preventing stock from ever dropping below zero.
+
+* **Peer-to-Peer Marketplace Architecture:**
+  * **Ownership & Access Control:** Products are linked to sellers via relational foreign keys (`owner_id`), strictly gating product updates and deletions with authorization checks (`403 Forbidden`).
+  * **Dual-Entity Pessimistic Locking:** The checkout transaction coordinates atomic row-level locks on both product inventory and seller user accounts using `SELECT ... FOR UPDATE`, guaranteeing thread-safe inventory deduction and real-time digital wallet payouts.
+  * **Two-Sided Ledger Accounting:** Concurrently records buyer purchase receipts (`orders` & `order_items`) and seller payout entries (`sell_transactions`) in a single database transaction.

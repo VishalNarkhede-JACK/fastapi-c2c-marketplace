@@ -1,4 +1,4 @@
-from fastapi import Depends, FastAPI, HTTPException, status, BackgroundTasks
+from fastapi import Depends, FastAPI,Body, HTTPException, status, BackgroundTasks
 from models import Produk, ResponseToUser, UserLogin, UserCreate,CartItemAdd
 from database import session, engine
 import database_models
@@ -23,49 +23,53 @@ def get_db():
         db.close()
 
  
+def nothing():
+    pass
+    # def init_db():
+    #     db = session()
+    #     count = db.query(database_models.Produk).count()
+    #     if count < 1:
+    #         for product in produk_list:
+    #             db.add(database_models.Produk(**product.model_dump()))
+    #         db.commit()
+    # init_db()
 
-# def init_db():
-#     db = session()
-#     count = db.query(database_models.Produk).count()
-#     if count < 1:
-#         for product in produk_list:
-#             db.add(database_models.Produk(**product.model_dump()))
-#         db.commit()
-# init_db()
-
-@app.get("/produck")
-def get_product(db: Session = Depends(get_db)):
-    # db = session()
-    # Go to Postgres and grab every row in the Produk table
-    all_products = db.query(database_models.Produk).all() 
-    return all_products
-
-
-
-@app.get("/produck/{id}")
-def single_element(id:int, db: Session = Depends(get_db)):
-    one_product = db.query(database_models.Produk).filter(database_models.Produk.id == id).first()
-    if one_product:
-        return one_product
-    else:
-        return "not Available"
+    # @app.get("/produck")
+    # def get_product(db: Session = Depends(get_db)):
+    #     # db = session()
+    #     # Go to Postgres and grab every row in the Produk table
+    #     all_products = db.query(database_models.Produk).all() 
+    #     return all_products
 
 
 
-# @app.post("/produck")
-# def add_complex(pro: Produk,db: Session = Depends(get_db) ):
+    # @app.get("/produck/{id}")
+    # def single_element(id:int, db: Session = Depends(get_db)):
+    #     one_product = db.query(database_models.Produk).filter(database_models.Produk.id == id).first()
+    #     if one_product:
+    #         return one_product
+    #     else:
+    #         return "not Available"
 
-#     db.add(database_models.Produk(**pro.model_dump()))
-#     # produk_list.append(pro)
-#     db.commit()
-#     return pro
 
-@app.post("/produck")
-def add_easy(pro: Produk):
-    db = session()
-    
-    # 1. We completely remove "id=pro.id"
+
+    # @app.post("/produck")
+    # def add_complex(pro: Produk,db: Session = Depends(get_db) ):
+
+    #     db.add(database_models.Produk(**pro.model_dump()))
+    #     # produk_list.append(pro)
+    #     db.commit()
+    #     return pro
+
+@app.post("/produck", status_code=status.HTTP_201_CREATED)
+def add_easy(
+    pro: Produk, # The Pydantic model from models.py
+    db: Session = Depends(get_db),
+    current_user_id: int = Depends(utils.get_current_user) # SECURITY: Must be logged in!
+):
+    # We automatically inject the current_user_id into the owner_id column
     new_product = database_models.Produk(
+        owner_id=current_user_id, 
         name=pro.name,
         description=pro.description,
         price=pro.price,
@@ -74,59 +78,85 @@ def add_easy(pro: Produk):
     
     db.add(new_product)
     db.commit()
-    db.refresh(new_product) # This grabs the newly generated ID from Postgres
+    db.refresh(new_product) 
     
-    return new_product
-
+    return {
+        "message": "Product successfully listed on the marketplace!", 
+        "product": new_product
+    }
 
 
 @app.put("/produck/{id}")
-def update(id: int, pro: Produk, db: Session = Depends(get_db)):
+def update(
+    id: int, 
+    pro: Produk, 
+    db: Session = Depends(get_db),
+    current_user_id: int = Depends(utils.get_current_user) # SECURITY: Enforce login
+):
     
-    # 1. Find the item (Fixed the '=' to '==')
+    # 1. Look for the product in the database
     db_product = db.query(database_models.Produk).filter(database_models.Produk.id == id).first()
     
-    # 2. If it doesn't exist in Postgres, stop and return the error
+    # 2. Check Existence: Does the product exist at all?
     if not db_product:
-        return {"error": "Product ID is mismatched or not listed"}  
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, 
+            detail="Product ID does not exist in the database."
+        )  
+        
+    # 3. Check Authorization: Does this product belong to the person trying to edit it?
+    if db_product.owner_id != current_user_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN, 
+            detail="Unauthorized: You can only edit your own listings."
+        )
     
-    # 3. Update the specific columns one by one with the new data
+    # 4. Execute the updates
     db_product.name = pro.name
     db_product.description = pro.description
     db_product.price = pro.price
     db_product.quantity = pro.quantity
     
-    # 4. Save the changes to the hard drive
+    # 5. Save changes to the database
     db.commit()
-    
-    # Optional but good practice: Refreshes the Python object with the new database info
     db.refresh(db_product) 
     
-    return {"message": "Updated successfully", "product": db_product}
+    return {"message": "Listing updated successfully", "product": db_product}
 
 
 @app.delete("/produck/{id}")
-def delete_item(id: int, db: Session = Depends(get_db)):
+def delete_item(
+    id: int, 
+    db: Session = Depends(get_db),
+    current_user_id: int = Depends(utils.get_current_user) # SECURITY: Enforce login
+):
     
+    # 1. Look for the product in the database
     db_product = db.query(database_models.Produk).filter(database_models.Produk.id == id).first()
     
-    # --- THE PROFESSIONAL FIX ---
+    # 2. Check Existence: If it doesn't exist, return 404
     if not db_product:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, 
             detail="Product ID does not exist in the database."
         )
-    # ----------------------------
+        
+    # 3. Check Authorization: Does this product belong to the person trying to delete it?
+    if db_product.owner_id != current_user_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN, 
+            detail="Unauthorized: You can only delete your own listings."
+        )
     
+    # 4. Execute the deletion
     db.delete(db_product)
     db.commit()
     
-    return {"message": "deleted successfully"}
+    return {"message": "Listing deleted successfully."}
 
-
-@app.get("/biach")
-def biach():
-    return "you dumb biach"
+# @app.get("/biach")
+# def biach():
+#     return "you dumb biach"
 
 # the user login and password section(addtion to the base code)
 
@@ -296,6 +326,9 @@ def process_checkout(
 
     total_amount = 0.0
     order_items_to_add = []
+    
+    # NEW ADDITION: Staging area for seller receipts
+    sell_transactions_to_add = [] 
 
     # 2. Iterate through the cart, locking each product as we go
     for item in cart_items:
@@ -313,8 +346,21 @@ def process_checkout(
             )
 
         # 4. Math & Inventory Deduction
-        total_amount += (product.price * item.quantity)
+        # NEW ADDITION: Calculate item subtotal for both the buyer's total and the seller's payout
+        item_subtotal = product.price * item.quantity
+        
+        # Changed from `total_amount += (product.price * item.quantity)` to use the subtotal variable
+        total_amount += item_subtotal  
         product.quantity -= item.quantity  # Safely decrease the stock
+        
+        # NEW ADDITION: MUTEX 2: Lock the Seller & Pay Them
+        # We lock the seller's user row so we can safely add floating-point currency to their wallet
+        seller = db.query(database_models.User).filter(
+            database_models.User.id == product.owner_id
+        ).with_for_update().first()
+        
+        if seller:
+            seller.wallet_balance += item_subtotal
 
         # Stage the line item to be saved later
         order_items_to_add.append(
@@ -324,23 +370,38 @@ def process_checkout(
                 unit_price=product.price
             )
         )
+        
+        # NEW ADDITION: Stage the Seller's Receipt (For their seller history)
+        sell_transactions_to_add.append(
+            database_models.SellTransaction(
+                user_id=product.owner_id,     # The person getting paid
+                product_id=product.id,
+                quantity_sold=item.quantity,
+                unit_payout=product.price
+            )
+        )
 
     # 5. Create the Order Header
     new_order = database_models.Order(
         user_id=current_user_id,
         total_amount=total_amount,
-        status="Pending"
+        # NEW ADDITION: Changed status to "Paid" since funds are instantly transferring to wallets
+        status="Paid" 
     )
     db.add(new_order)
-#      # CRITICAL: We use flush() instead of commit() here.
-#     # flush() sends the data to PostgreSQL to generate the primary key (new_order.id),
-#     # but keeps the transaction OPEN in memory so we can roll back if something fails later.
+#      # CRITICAL: We use flush() instead of commit() here.
+#     # flush() sends the data to PostgreSQL to generate the primary key (new_order.id),
+#     # but keeps the transaction OPEN in memory so we can roll back if something fails later.
     db.flush() 
 
     # 6. Attach the staged items to the new order ID
     for order_item in order_items_to_add:
         order_item.order_id = new_order.id
         db.add(order_item)
+        
+    # NEW ADDITION: Add all the seller receipts to the database
+    for sell_receipt in sell_transactions_to_add:
+        db.add(sell_receipt)
 
     # 7. Wipe the Cart
     db.query(database_models.Cart).filter(
@@ -352,7 +413,8 @@ def process_checkout(
     db.refresh(new_order)
 
     return {
-        "message": "Checkout successful! Stock has been updated.", 
+        # NEW ADDITION: Updated message to reflect the marketplace action
+        "message": "Checkout successful! Stock updated and sellers paid.", 
         "order_id": new_order.id, 
         "total_paid": total_amount
     }
@@ -403,4 +465,6 @@ def get_order_history(
 
     # 7. Return the massive JSON object to the frontend
     return {"user_id": current_user_id, "order_history": formatted_history}
+
+
 

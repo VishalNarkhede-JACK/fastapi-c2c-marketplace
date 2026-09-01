@@ -7,12 +7,16 @@ class Produk(Base):
     __tablename__ = "product"
 
     id = Column(Integer, primary_key=True, index=True)
+    
+    # NEW: Links the product to the user who uploaded it
+    owner_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    
     name = Column(String)
     description = Column(String)
     price = Column(Float)
     quantity = Column(Integer)
 
-
+    
 class User(Base):
     __tablename__ = "users"
 
@@ -20,7 +24,23 @@ class User(Base):
     email = Column(String, nullable=False, unique=True)
     password = Column(String, nullable=False)
     
-    # Automatically stamps the time the user was created
+    # NEW: The user's digital bank account
+    wallet_balance = Column(Float, nullable=False, default=0.0) 
+    
+    created_at = Column(TIMESTAMP(timezone=True), nullable=False, server_default=text('now()'))
+
+class SellTransaction(Base):
+    __tablename__ = "sell_transactions"
+    
+    id = Column(Integer, primary_key=True, nullable=False)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    product_id = Column(Integer, ForeignKey("product.id", ondelete="SET NULL"), nullable=True)
+    
+    quantity_sold = Column(Integer, nullable=False)
+    
+    # How much we paid the user per item
+    unit_payout = Column(Float, nullable=False) 
+    
     created_at = Column(TIMESTAMP(timezone=True), nullable=False, server_default=text('now()'))
 
 
