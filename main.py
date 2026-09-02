@@ -466,5 +466,69 @@ def get_order_history(
     # 7. Return the massive JSON object to the frontend
     return {"user_id": current_user_id, "order_history": formatted_history}
 
+@app.get("/wallet")
+def get_wallet_balance(
+    current_user_id: int = Depends(utils.get_current_user),
+    db: Session = Depends(get_db)
+):
+    # Fetch the user's current record
+    user = db.query(database_models.User).filter(
+        database_models.User.id == current_user_id
+    ).first()
 
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found.")
+
+    return {
+        "user_id": user.id, 
+        "wallet_balance": user.wallet_balance
+    }
+
+@app.get("/my-sales")
+def get_sales_history(
+    current_user_id: int = Depends(utils.get_current_user),
+    db: Session = Depends(get_db)
+):
+    # 1. The Relational Query (OUTER JOIN)
+    # We join the receipt table with the product table to get the name of the item.
+    # We use outerjoin so that if the product was deleted from the database, 
+    # the seller still gets to see their historical receipt.
+    sales = db.query(
+        database_models.SellTransaction, 
+        database_models.Produk.name
+    ).outerjoin(
+        database_models.Produk, 
+        database_models.SellTransaction.product_id == database_models.Produk.id
+    ).filter(
+        database_models.SellTransaction.user_id == current_user_id
+    ).order_by(
+        database_models.SellTransaction.created_at.desc()
+    ).all()
+
+    if not sales:
+        return {"message": "You haven't made any sales yet.", "sales_history": []}
+
+    formatted_sales = []
+    total_lifetime_earnings = 0.0
+
+    # 2. Format the payload for the frontend
+    for transaction, product_name in sales:
+        total_earned = transaction.quantity_sold * transaction.unit_payout
+        total_lifetime_earnings += total_earned
+        
+        formatted_sales.append({
+            "transaction_id": transaction.id,
+            # If the product was deleted, product_name will be None
+            "product_name": product_name if product_name else "Deleted Product",
+            "quantity_sold": transaction.quantity_sold,
+            "unit_payout": transaction.unit_payout,
+            "total_earned": total_earned,
+            "date": transaction.created_at
+        })
+
+    return {
+        "user_id": current_user_id,
+        "total_lifetime_earnings": total_lifetime_earnings,
+        "sales_history": formatted_sales
+    }
 

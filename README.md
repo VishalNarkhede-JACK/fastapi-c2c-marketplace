@@ -40,3 +40,5 @@ A robust, RESTful backend API built with **FastAPI** and **PostgreSQL**. This se
   * **Ownership & Access Control:** Products are linked to sellers via relational foreign keys (`owner_id`), strictly gating product updates and deletions with authorization checks (`403 Forbidden`).
   * **Dual-Entity Pessimistic Locking:** The checkout transaction coordinates atomic row-level locks on both product inventory and seller user accounts using `SELECT ... FOR UPDATE`, guaranteeing thread-safe inventory deduction and real-time digital wallet payouts.
   * **Two-Sided Ledger Accounting:** Concurrently records buyer purchase receipts (`orders` & `order_items`) and seller payout entries (`sell_transactions`) in a single database transaction.
+
+* **Seller Dashboard & Ledger Resilience:** Implemented secure endpoints for users to track real-time wallet balances and lifetime earnings. Built robust ledger queries using SQL `OUTER JOIN`s to ensure users retain their complete financial history even if the underlying marketplace listings are deleted.
