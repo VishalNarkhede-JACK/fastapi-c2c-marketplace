@@ -42,3 +42,11 @@ A robust, RESTful backend API built with **FastAPI** and **PostgreSQL**. This se
   * **Two-Sided Ledger Accounting:** Concurrently records buyer purchase receipts (`orders` & `order_items`) and seller payout entries (`sell_transactions`) in a single database transaction.
 
 * **Seller Dashboard & Ledger Resilience:** Implemented secure endpoints for users to track real-time wallet balances and lifetime earnings. Built robust ledger queries using SQL `OUTER JOIN`s to ensure users retain their complete financial history even if the underlying marketplace listings are deleted.
+
+## QA Testing & System Optimizations
+During the development of the marketplace engine, several critical business logic and scalability edge-cases were identified and resolved:
+
+* **Strict Financial Validation:** Discovered a vulnerability where the checkout pipeline paid sellers without verifying buyer funds. Fixed by injecting a third atomic lock (`with_for_update()`) to validate and deduct the buyer's wallet balance before finalizing the transaction.
+* **Schema Drift Resolution:** Handled 500 Internal Server Errors caused by SQLAlchemy/PostgreSQL sync issues during the marketplace pivot by executing manual `ALTER TABLE` migrations for new columns.
+* **Query Scalability:** Prevented potential memory overload on the `GET /produck` route by implementing SQL-level pagination (`LIMIT` and `OFFSET`) and dynamic search filters (`ilike`), shifting the computational weight to the PostgreSQL engine. 
+* **Top-Up Simulator:** Engineered a thread-safe `POST /wallet/top-up` endpoint to securely fund buyer accounts and facilitate end-to-end testing of the checkout pipeline..
