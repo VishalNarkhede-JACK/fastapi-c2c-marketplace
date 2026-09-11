@@ -61,6 +61,46 @@ def nothing():
     #     db.commit()
     #     return pro
 
+@app.get("/produck")
+def get_product(db: Session = Depends(get_db)):
+    # db = session()
+        # Go to Postgres and grab every row in the Produk table
+        all_products = db.query(database_models.Produk).all() 
+        return all_products
+
+
+from typing import Optional
+
+@app.get("/produck")
+def get_products_by_name(
+    db: Session = Depends(get_db),
+    # 1. Pagination Parameters
+    limit: int = 10,     # How many items to return per page
+    skip: int = 0,       # How many items to skip (offset)
+    # 2. Search & Filter Parameters
+    search: Optional[str] = "",
+    min_price: Optional[float] = None,
+    max_price: Optional[float] = None
+):
+    # Start building the query dynamically
+    # ilike() makes the search case-insensitive (e.g., "mouse" matches "Mouse")
+    query = db.query(database_models.Produk).filter(
+        database_models.Produk.name.ilike(f"%{search}%")
+    )
+    
+    # Conditionally add price filters if the user provided them
+    if min_price is not None:
+        query = query.filter(database_models.Produk.price >= min_price)
+    
+    if max_price is not None:
+        query = query.filter(database_models.Produk.price <= max_price)
+        
+    # Finally, apply the pagination limits and execute the query
+    products = query.offset(skip).limit(limit).all()
+    
+    return {"results": len(products), "products": products}
+
+
 @app.post("/produck", status_code=status.HTTP_201_CREATED)
 def add_easy(
     pro: Produk, # The Pydantic model from models.py
@@ -326,8 +366,6 @@ def process_checkout(
 
     total_amount = 0.0
     order_items_to_add = []
-    
-    # NEW ADDITION: Staging area for seller receipts
     sell_transactions_to_add = [] 
 
     # 2. Iterate through the cart, locking each product as we go
@@ -346,15 +384,11 @@ def process_checkout(
             )
 
         # 4. Math & Inventory Deduction
-        # NEW ADDITION: Calculate item subtotal for both the buyer's total and the seller's payout
         item_subtotal = product.price * item.quantity
-        
-        # Changed from `total_amount += (product.price * item.quantity)` to use the subtotal variable
-        total_amount += item_subtotal  
+        total_amount += item_subtotal 
         product.quantity -= item.quantity  # Safely decrease the stock
         
-        # NEW ADDITION: MUTEX 2: Lock the Seller & Pay Them
-        # We lock the seller's user row so we can safely add floating-point currency to their wallet
+        # MUTEX 2: Lock the Seller & Pay Them
         seller = db.query(database_models.User).filter(
             database_models.User.id == product.owner_id
         ).with_for_update().first()
@@ -371,27 +405,43 @@ def process_checkout(
             )
         )
         
-        # NEW ADDITION: Stage the Seller's Receipt (For their seller history)
+        # Stage the Seller's Receipt (For their seller history)
         sell_transactions_to_add.append(
             database_models.SellTransaction(
-                user_id=product.owner_id,     # The person getting paid
+                user_id=product.owner_id,     
                 product_id=product.id,
                 quantity_sold=item.quantity,
                 unit_payout=product.price
             )
         )
 
+    # ==========================================
+    # MUTEX 3: Lock the Buyer & Deduct Funds
+    # ==========================================
+    buyer = db.query(database_models.User).filter(
+        database_models.User.id == current_user_id
+    ).with_for_update().first()
+
+    # Check if they have enough money
+    if buyer.wallet_balance < total_amount:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Insufficient funds. Total is ${total_amount}, but your balance is only ${buyer.wallet_balance}."
+        )
+    
+    # Deduct the money safely
+    buyer.wallet_balance -= total_amount
+
+    # ==========================================
+    # FINALIZING THE TRANSACTION
+    # ==========================================
     # 5. Create the Order Header
     new_order = database_models.Order(
         user_id=current_user_id,
         total_amount=total_amount,
-        # NEW ADDITION: Changed status to "Paid" since funds are instantly transferring to wallets
         status="Paid" 
     )
     db.add(new_order)
-#      # CRITICAL: We use flush() instead of commit() here.
-#     # flush() sends the data to PostgreSQL to generate the primary key (new_order.id),
-#     # but keeps the transaction OPEN in memory so we can roll back if something fails later.
     db.flush() 
 
     # 6. Attach the staged items to the new order ID
@@ -399,7 +449,7 @@ def process_checkout(
         order_item.order_id = new_order.id
         db.add(order_item)
         
-    # NEW ADDITION: Add all the seller receipts to the database
+    # Add all the seller receipts to the database
     for sell_receipt in sell_transactions_to_add:
         db.add(sell_receipt)
 
@@ -413,7 +463,6 @@ def process_checkout(
     db.refresh(new_order)
 
     return {
-        # NEW ADDITION: Updated message to reflect the marketplace action
         "message": "Checkout successful! Stock updated and sellers paid.", 
         "order_id": new_order.id, 
         "total_paid": total_amount
@@ -484,6 +533,34 @@ def get_wallet_balance(
         "wallet_balance": user.wallet_balance
     }
 
+@app.post("/wallet/top-up", status_code=status.HTTP_200_OK)
+def top_up_wallet(
+    # Use Body(..., gt=0) to ensure the user cannot top up a negative amount
+    amount: float = Body(..., gt=0, embed=True),
+    current_user_id: int = Depends(utils.get_current_user),
+    db: Session = Depends(get_db)
+):
+    # 1. Lock the user's row to prevent concurrent overwrite errors
+    user = db.query(database_models.User).filter(
+        database_models.User.id == current_user_id
+    ).with_for_update().first()
+
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found.")
+
+    # 2. Add the funds
+    user.wallet_balance += amount
+
+    # 3. Commit to save and release the lock
+    db.commit()
+    db.refresh(user)
+
+    return {
+        "message": f"Successfully added ${amount} to your wallet.",
+        "new_balance": user.wallet_balance
+    }
+
+
 @app.get("/my-sales")
 def get_sales_history(
     current_user_id: int = Depends(utils.get_current_user),
@@ -531,4 +608,5 @@ def get_sales_history(
         "total_lifetime_earnings": total_lifetime_earnings,
         "sales_history": formatted_sales
     }
+
 

@@ -95,3 +95,7 @@ class OrderItem(Base):
     
     # THE CRITICAL COLUMN: The historical price
     unit_price = Column(Float, nullable=False)
+
+
+
+
